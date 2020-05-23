@@ -1,0 +1,76 @@
+--- main.c	2017-06-07 15:29:47.267786398 +0530
++++ main.c_bkp	2017-06-07 15:29:24.611786491 +0530
+@@ -528,6 +528,65 @@
+ 				signum);
+ 		force_quit = true;
+ 	}
++	else if (signum == SIGUSR1) {
++		uint16_t mtu = 0;
++		int32_t ret = 0;
++
++		printf("\n\nSignal %d received, preparing to change MTU...\n", signum);
++
++		rte_eth_dev_get_mtu(0, &mtu);
++		printf(" Current MTU for port 0 %u, setting MTU to 5000\n", mtu);
++		mtu = 5000;
++		rte_eth_dev_stop (0);
++		ret = rte_eth_dev_set_mtu(0, mtu);
++		if (ret != 0) {
++			rte_exit(EXIT_FAILURE, "failed to set mtu %d\n", ret);
++		}
++		ret = rte_eth_dev_start (0);
++
++		rte_eth_dev_get_mtu(0, &mtu);
++		printf(" Current MTU for port 0 %u, setting MTU to 6000\n", mtu);
++		mtu = 6000;
++		rte_eth_dev_stop (0);
++		ret = rte_eth_dev_set_mtu(0, mtu);
++		if (ret != 0) {
++			rte_exit(EXIT_FAILURE, "failed to set mtu %d\n", ret);
++		}
++		ret = rte_eth_dev_start (0);
++
++		rte_eth_dev_get_mtu(0, &mtu);
++		printf(" Current MTU for port 0 %u, setting MTU to 7000\n", mtu);
++		mtu = 7000;
++		rte_eth_dev_stop (0);
++		ret = rte_eth_dev_set_mtu(0, mtu);
++		if (ret != 0) {
++			rte_exit(EXIT_FAILURE, "failed to set mtu %d\n", ret);
++		}
++		ret = rte_eth_dev_start (0);
++
++		rte_eth_dev_get_mtu(0, &mtu);
++		printf(" Current MTU for port 0 %u, setting MTU to 8000\n", mtu);
++		mtu = 8000;
++		rte_eth_dev_stop (0);
++		ret = rte_eth_dev_set_mtu(0, mtu);
++		if (ret != 0) {
++			rte_exit(EXIT_FAILURE, "failed to set mtu %d\n", ret);
++		}
++		ret = rte_eth_dev_start (0);
++
++		rte_eth_dev_get_mtu(0, &mtu);
++		printf(" Current MTU for port 0 %u, setting MTU to 9000\n", mtu);
++		mtu = 9000;
++		rte_eth_dev_stop (0);
++		ret = rte_eth_dev_set_mtu(0, mtu);
++		if (ret != 0) {
++			rte_exit(EXIT_FAILURE, "failed to set mtu %d\n", ret);
++		}
++		ret = rte_eth_dev_start (0);
++	
++		rte_eth_dev_get_mtu(0, &mtu);
++		printf(" Current MTU for port 0 %u\n", mtu);
++	}
+ }
+ 
+ int
+@@ -552,6 +611,7 @@
+ 	force_quit = false;
+ 	signal(SIGINT, signal_handler);
+ 	signal(SIGTERM, signal_handler);
++	signal(SIGUSR1, signal_handler);
+ 
+ 	/* parse application arguments (after the EAL ones) */
+ 	ret = l2fwd_parse_args(argc, argv);

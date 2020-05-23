@@ -1,0 +1,75 @@
+"dpdk-16.04/drivers/net/virtio/virtio_ethdev.c" rx_func_get
+
+differences found from stable dpdk release
+
+1) DPDK: 16.07.2, 
+   Module: virtio
+   File: drivers/net/virtio/virtio_ethdev.c
+
+
+--- drivers/net/virtio/virtio_ethdev.c  2017-01-20 00:31:38.612000000 +0530
++++ drivers/net/virtio/virtio_ethdev.c_bkp      2017-01-22 16:41:00.988000000 +0530
+@@ -1110,12 +1110,10 @@
+ rx_func_get(struct rte_eth_dev *eth_dev)
+ {
+        struct virtio_hw *hw = eth_dev->data->dev_private;
+-        if (hw) {
+        if (vtpci_with_feature(hw, VIRTIO_NET_F_MRG_RXBUF))
+                eth_dev->rx_pkt_burst = &virtio_recv_mergeable_pkts;
+        else
+                eth_dev->rx_pkt_burst = &virtio_recv_pkts;
+-       }
+ }
+
+
+ {
+        struct rte_eth_link link;
+
++       uint16_t status = 0;
++       struct virtio_hw *hw = dev->data->dev_private;
++
+        PMD_INIT_LOG(DEBUG, "stop");
+
+        if (dev->data->dev_conf.intr_conf.lsc)
+@@ -1495,6 +1598,19 @@
+
+        memset(&link, 0, sizeof(link));
+        virtio_dev_atomic_write_link_status(dev, &link);
++
++       /*if hw feature supported then update hw status too??*/
++       if (vtpci_with_feature(hw, VIRTIO_NET_F_STATUS)) {
++               printf ("Set link status to hw");
++               PMD_INIT_LOG(DEBUG, "Set link status to hw");
++               vtpci_write_dev_config(hw,
++                       offsetof(struct virtio_net_config, status),
++                       &status, sizeof(status));
++       }
++
++       printf("\n dev rx_pkt_burst: %p tx_pkt_burst: %p", dev->rx_pkt_burst, dev->tx_pkt_burst);
++       dev->rx_pkt_burst = virtual_ethdev_rx_burst_fail;
++       dev->tx_pkt_burst = virtual_ethdev_rx_burst_fail;
+ }
+
+ 
+
+ virtio_dev_start(struct rte_eth_dev *dev)
+ {
+        uint16_t nb_queues, i;
+-       struct virtio_hw *hw = dev->data->dev_private;
+        struct virtnet_rx *rxvq;
+        struct virtnet_tx *txvq __rte_unused;
++       struct virtio_hw *hw = dev->data->dev_private;
++
++       rx_func_get(dev);
+
+        /* check if lsc interrupt feature is enabled */
+        if (dev->data->dev_conf.intr_conf.lsc) {
+
+
+For DEBUG:
+   .config: 
+      CONFIG_RTE_TOOLCHAIN_DEBUG=y
+   mk/toolchain/gcc/rte.vars.mk: 
+      TOOLCHAIN_CFLAGS += -g -ggdb
+      TOOLCHAIN_LDFLAGS += -g -ggdb
+

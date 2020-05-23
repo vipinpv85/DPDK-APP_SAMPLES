@@ -1,0 +1,192 @@
+A. Prefetch
+
+nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst, MAX_PKT_BURST);
+
+if (unlikely(nb_rx == 0))
+	continue;
+
+/* Prefetch first packets */
+for (j = 0; j < PREFETCH_OFFSET && j < nb_rx; j++) {
+	rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[j], void *));
+}
+
+/* Prefetch and forward already prefetched packets */
+for (j = 0; j < (nb_rx - PREFETCH_OFFSET); j++) {
+	rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[j + PREFETCH_OFFSET], void *));
+	mylogic(pkts_burst[j], portid, qconf);
+}
+
+/* Forward remaining prefetched packets */
+for (; j < nb_rx; j++) {
+	mylogic(pkts_burst[j], portid, qconf);
+}
+
+
+B. map PF to VF
+
+code:
+char name[RTE_MAX_ETHPORTS][250];
+char driver_name[RTE_MAX_ETHPORTS][250];
+struct rte_eth_dev_info dev_info;
+uint16_t ports = rte_eth_dev_count_avail();
+
+if (ports) {
+	for (int i = 0; i < ports; i++)
+	{
+		rte_eth_dev_info_get(i, &dev_info);
+
+		if (rte_eth_dev_get_name_by_port(i, name[i]) == 0) {
+			printf(" driver_name (%s) name (%s)\n", dev_info.driver_name, name[i]);
+			snprintf(driver_name[i], 250, "%s", dev_info.driver_name);
+			driver_name[i][249] = '\0';
+		}
+	}
+}
+printf(" compare ports for id \n");
+for (int i = 0; i < ports; i++)
+{
+	for (int j = 0; j < ports; j++)
+	{
+		if (strstr(driver_name[j], "vf") != NULL)
+		if ((strncmp(name[i], name[j], 8) == 0) &&
+			(strncmp(name[i], name[j], 12) != 0))
+				printf(" device-driver: (%s)-(%s), (%s)-(%s)\n",
+					name[i], driver_name[i],
+					name[j], driver_name[j]);
+	}
+}
+
+printf(" list device under /sys/bus/pci/drivers/igb_uio/ \n");
+struct dirent *dir;
+DIR *d = opendir("/sys/bus/pci/drivers/igb_uio/");
+
+if (d) {
+	int i = 0;
+
+	while ((dir = readdir(d)) != NULL)
+	{
+		if (strncmp(dir->d_name, "0000", 4) == 0)
+			printf("\t %d. %s\n", i++, dir->d_name);
+	}
+}
+
+Logs:
+ driver_name (net_i40e) name (0000:08:00.2)
+ driver_name (net_i40e_vf) name (0000:08:0e.1)
+ driver_name (net_i40e) name (0000:83:00.3)
+ 
+ compare ports for id
+ device-driver: (0000:08:00.2)-(net_i40e), (0000:08:0e.1)-(net_i40e_vf)
+ 
+ list device under /sys/bus/pci/drivers/igb_uio/
+         0. 0000:08:00.2
+         1. 0000:05:01.0
+         2. 0000:83:00.3
+         3. 0000:05:03.0
+         4. 0000:08:0e.1
+
+C.
+
+        printf(" list the VF present for PF\n");
+        char cmd[1000];
+        for (int i = 0; i < ports; i++)
+        {
+                if (strstr(driver_name[i], "vf") != NULL) {
+                        snprintf(cmd, 1000, "ls -l /sys/bus/pci/devices/%s/physfn | cut -d ' ' -f 11", name[i]);
+                        //printf(" list parent device under (%s)\n", cmd);
+
+                        char path[1035];
+                        FILE *fp = popen(cmd, "r");
+                        if (fp == NULL)
+                                rte_panic("failed to open popen");
+
+                        char *result = fgets(path, sizeof(path)-1, fp);
+                        if (!result)
+                                rte_panic(" failed to find phy device");
+
+                        printf(" device (%s) parent (%s)\n", name[i], result);
+                }
+                else
+                        printf(" device (%s) parent (%s)\n", name[i], name[i]);
+        }
+
+## Logs:
+ device (0000:08:00.2) parent (0000:08:00.2)
+ device (0000:81:02.1) parent (../0000:81:00.0)
+ device (0000:81:02.2) parent (../0000:81:00.0)
+ device (0000:81:02.3) parent (../0000:81:00.0)
+ device (0000:81:0a.3) parent (../0000:81:00.1)
+
+D. 
+
+        uint16_t ports = rte_eth_dev_count_avail();
+
+        if (ports) {
+                printf("\n");
+                for (int i = 0; i < ports; i++)
+                {
+                        rte_eth_dev_info_get(i, &dev_info);
+
+                        if (rte_eth_dev_get_name_by_port(i, name[i]) == 0) {
+                                printf(" driver_name (%20s) name (%20s) max_vfs (%5u) max_rx_queues (%5u) max_tx_queues (%5u)\n",
+                                                dev_info.driver_name, name[i],
+                                                dev_info.max_vfs, dev_info.max_rx_queues, dev_info.max_tx_queues);
+
+                                snprintf(driver_name[i], 250, "%s", dev_info.driver_name);
+                                driver_name[i][249] = '\0';
+                        }
+                }
+        }
+
+        printf(" list the VF present for PF\n");
+        char cmd[1000];
+        for (int i = 0; i < ports; i++)
+        {
+                if (strstr(driver_name[i], "vf") != NULL) {
+                        snprintf(cmd, 1000, "ls -l /sys/bus/pci/devices/%s/physfn | cut -d ' ' -f 11 | grep 0000", name[i]);
+                        //printf(" list parent device under (%s)\n", cmd);
+
+                        char path[1035];
+                        FILE *fp = popen(cmd, "r");
+                        if (fp == NULL)
+                                rte_panic("failed to open popen");
+
+                        char *result = fgets(path, sizeof(path)-1, fp);
+                        if (!result)
+                                rte_panic(" failed to find phy device");
+
+                        memcpy(child_name[i], result, strlen(result));
+
+                        //printf(" device (%s) parent (%s)\n", name[i], result);
+                }
+                else {
+                        //printf(" device (%s) parent (%s)\n", name[i], name[i]);
+                        memcpy(child_name[i], name[i], strlen(name[i]));
+                }
+        }
+
+        printf(" compare ports for id \n");
+        for (int i = 0; i < ports; i++)
+        {
+                printf(" Device (%25s) - Parent (%25s) \n", name[i], child_name[i]);
+        }
+
+LOGS:
+ driver_name (            net_i40e) name (        0000:08:00.2) max_vfs (    0) max_rx_queues (  192) max_tx_queues (  192)
+ driver_name (         net_i40e_vf) name (        0000:81:02.1) max_vfs (    0) max_rx_queues (   16) max_tx_queues (   16)
+ driver_name (         net_i40e_vf) name (        0000:81:02.2) max_vfs (    0) max_rx_queues (   16) max_tx_queues (   16)
+ driver_name (         net_i40e_vf) name (        0000:81:02.3) max_vfs (    0) max_rx_queues (   16) max_tx_queues (   16)
+ driver_name (         net_i40e_vf) name (        0000:81:0a.3) max_vfs (    0) max_rx_queues (   16) max_tx_queues (   16)
+ driver_name (            net_i40e) name (        0000:83:00.2) max_vfs (    0) max_rx_queues (  192) max_tx_queues (  192)
+ list the VF present for PF
+ compare ports for id
+ Device (             0000:08:00.2) - Parent (             0000:08:00.2)
+ Device (             0000:81:02.1) - Parent (         ../0000:81:00.0
+)
+ Device (             0000:81:02.2) - Parent (         ../0000:81:00.0
+)
+ Device (             0000:81:02.3) - Parent (         ../0000:81:00.0
+)
+ Device (             0000:81:0a.3) - Parent (         ../0000:81:00.1
+)
+ Device (             0000:83:00.2) - Parent (             0000:83:00.2)

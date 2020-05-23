@@ -1,0 +1,680 @@
+--- main.c_orginal	2018-09-27 20:03:31.438296642 +0530
++++ main.c	2018-09-27 20:55:28.518451882 +0530
+@@ -59,6 +59,15 @@
+ #include <rte_string_fns.h>
+ #include <rte_metrics.h>
+ 
++#include <rte_cryptodev.h>
++#include <rte_service.h>
++#include <rte_tm.h>
++#include <rte_cpuflags.h>
++#include <rte_cryptodev.h>
++#include <rte_security.h>
++#include <rte_hexdump.h>
++
++
+ /* Maximum long option length for option parsing. */
+ #define MAX_LONG_OPT_SZ 64
+ #define RTE_LOGTYPE_APP RTE_LOGTYPE_USER1
+@@ -88,12 +97,29 @@
+ /**< Enable displaying xstat name. */
+ static uint32_t enable_xstats_name;
+ static char *xstats_name;
++/**< Enable interface debug. */
++static uint32_t enable_debug_intf;
++/**< Enable ring debug. */
++static uint32_t enable_debug_ring;
++static char *ring_name;
++/**< Enable mempool debug. */
++static uint32_t enable_debug_mempool;
++static char *mempool_name;
++/**< Enable cryptodev debug. */
++static uint32_t enable_debug_cryptodev;
++/**< Enable process debug. */
++static uint32_t enable_debug_process;
++/**< Enable tm debug. */
++static uint32_t enable_debug_tm;
+ 
+ /**< Enable xstats by ids. */
+ #define MAX_NB_XSTATS_IDS 1024
+ static uint32_t nb_xstats_ids;
+ static uint64_t xstats_ids[MAX_NB_XSTATS_IDS];
+ 
++static const char *dbg_border = "########################";
++static const char *sub_border = "++++++++++++++++++++++++";
++
+ /**< display usage */
+ static void
+ proc_info_usage(const char *prgname)
+@@ -112,7 +138,13 @@
+ 		"  --stats-reset: to reset port statistics\n"
+ 		"  --xstats-reset: to reset port extended statistics\n"
+ 		"  --collectd-format: to print statistics to STDOUT in expected by collectd format\n"
+-		"  --host-id STRING: host id used to identify the system process is running on\n",
++		"  --host-id STRING: host id used to identify the system process is running on\n"
++                "  --debug-intf to display debug information for all available ports\n"
++                "  --debug-ring[=name] to display debug information for ring\n"
++                "  --debug-mempool[=name] to display debug information for mempool [& iterate objects]\n"
++                "  --debug-cryptodev to display debug information for cryptodev\n"
++                "  --debug-process to display debug information for running process\n"
++                "  --debug-tm to display debug information for traffic manager\n",
+ 		prgname);
+ }
+ 
+@@ -219,6 +251,12 @@
+ 		{"collectd-format", 0, NULL, 0},
+ 		{"xstats-ids", 1, NULL, 1},
+ 		{"host-id", 0, NULL, 0},
++	        {"debug-intf", 0, NULL, 0},
++                {"debug-ring", optional_argument, NULL, 0},
++                {"debug-mempool", optional_argument, NULL, 0},
++                {"debug-cryptodev", 0, NULL, 0},
++                {"debug-process", 0, NULL, 0},
++                {"debug-tm", 0, NULL, 0},
+ 		{NULL, 0, 0, 0}
+ 	};
+ 
+@@ -262,6 +300,40 @@
+ 			else if (!strncmp(long_option[option_index].name, "xstats-reset",
+ 					MAX_LONG_OPT_SZ))
+ 				reset_xstats = 1;
++                        else if (!strncmp(long_option[option_index].name,
++                                        "debug-intf",
++                                        MAX_LONG_OPT_SZ))
++                                enable_debug_intf = 1;
++                        else if (!strncmp(long_option[option_index].name,
++                                        "debug-ring",
++                                        MAX_LONG_OPT_SZ)) {
++                                enable_debug_ring = 1;
++                                ring_name = optarg;
++                                printf("name:%s:%s\n",
++                                        long_option[option_index].name,
++                                        optarg);
++                        }
++                        else if (!strncmp(long_option[option_index].name,
++                                        "debug-mempool",
++                                        MAX_LONG_OPT_SZ))       {
++                                enable_debug_mempool = 1;
++                                mempool_name = optarg;
++                                printf("name:%s:%s\n",
++                                        long_option[option_index].name,
++                                        optarg);
++                        }
++                        else if (!strncmp(long_option[option_index].name,
++                                        "debug-cryptodev",
++                                        MAX_LONG_OPT_SZ))
++                                enable_debug_cryptodev = 1;
++                        else if (!strncmp(long_option[option_index].name,
++                                        "debug-process",
++                                        MAX_LONG_OPT_SZ))
++                                enable_debug_process = 1;
++                        else if (!strncmp(long_option[option_index].name,
++                                        "debug-tm",
++                                        MAX_LONG_OPT_SZ))
++                                enable_debug_tm = 1;
+ 			break;
+ 		case 1:
+ 			/* Print xstat single value given by name*/
+@@ -609,6 +681,535 @@
+ 	rte_free(names);
+ }
+ 
++static void
++debug_tm(void)
++{
++	enable_debug_tm = 0;
++
++	int i = 0, ret = 0;
++
++	printf("  %s TM INFO %s\n",
++		dbg_border, dbg_border);
++
++	RTE_ETH_FOREACH_DEV(i) {
++		struct rte_eth_dev_info dev_info = {0};
++		struct rte_tm_capabilities cap = {0};
++		struct rte_tm_error error = {0};
++		struct rte_tm_node_capabilities	capnode = {0};
++		struct rte_tm_level_capabilities caplevel = {0};
++		uint32_t n_leaf_nodes = 0;
++		
++		printf("  %s port (%d) %s\n",
++			sub_border, i, sub_border);
++
++		rte_eth_dev_info_get (i, &dev_info);
++		printf("  - driver name %s\n", dev_info.driver_name);
++
++		ret = rte_tm_get_number_of_leaf_nodes(i,
++			&n_leaf_nodes, &error); 
++		if (ret == 0) 
++			printf("  - leaf nodes (%u)\n", n_leaf_nodes);
++	
++		printf("  %s Capabilities %s\n",
++			sub_border, sub_border);
++	
++		ret = rte_tm_capabilities_get(i, &cap, &error);
++		if (ret == 0) {
++			printf("  - MAX: "
++				"nodes (%u) "
++				"levels (%u) "
++				"children (%u)\n",
++				cap.n_nodes_max,
++				cap.n_levels_max,
++				cap.sched_n_children_max);
++			printf("  - mask (0x%"PRIx64") "
++				"dynamic update (0x%"PRIx64")\n",
++				cap.stats_mask,
++				cap.dynamic_update_mask); 
++			printf("  - identical nodes: "
++				"non leaf (%d) "
++				"leaf (%d)\n",
++				cap.non_leaf_nodes_identical,
++				cap.leaf_nodes_identical);
++			printf("  - Shaper: "
++				"max (%u) "
++				"max private (%u) "
++				"dual (%d)\n",
++				cap.shaper_n_max,
++				cap.shaper_private_n_max,
++				cap.shaper_private_dual_rate_n_max);
++			printf("  - CMAN WRED mode: "
++				"head drop (%d)\n",
++				cap.cman_head_drop_supported);
++
++			for (unsigned int j = 0; j < cap.n_nodes_max; j++) {
++				ret = rte_tm_node_capabilities_get(i, j,
++					&capnode, &error);
++				if (ret == 0) {
++					printf("  %s NODE %u %s\n",
++						sub_border, j, sub_border);
++					int is_leaf = 0;
++	
++					printf("  - shaper private: (%d) "
++						"dual rate (%d)\n",
++						capnode.shaper_private_supported,
++						capnode.shaper_private_dual_rate_supported);
++	 				printf("  - shaper shared max: (%u)\n",
++						capnode.shaper_shared_n_max);
++	
++					ret = rte_tm_node_type_get(i, j, &is_leaf, &error);
++					if (ret == 0) {
++						if (!is_leaf) {
++							printf("  - nonleaf max: "
++								"children (%u) "
++								"sp priorities (%u) "
++								"wfq groups (%u)\n",
++								capnode.nonleaf.sched_n_children_max,
++								capnode.nonleaf.sched_sp_n_priorities_max,
++								capnode.nonleaf.sched_wfq_n_groups_max);
++						} else {
++							printf("  - leaf max mode: "
++								"head drop (%d)\n",
++								capnode.leaf.cman_head_drop_supported);
++						}
++					}
++				}
++			}
++
++			for (unsigned int j = 0; j < cap.n_levels_max; j++) {
++				ret = rte_tm_level_capabilities_get(i, j,
++					&caplevel, &error);
++				if (ret == 0) {
++					printf("  %s Level %u %s\n",
++						sub_border, j, sub_border);
++					printf("  - max node: %u "
++						"non leaf %u "
++						"leaf %u \n",
++						caplevel.n_nodes_max,
++						caplevel.n_nodes_nonleaf_max,
++						caplevel.n_nodes_leaf_max);
++					printf("  - indetical: "
++						"non leaf %u "
++						"leaf %u\n",
++						caplevel.non_leaf_nodes_identical,
++						caplevel.leaf_nodes_identical);
++				}
++			}
++
++		}
++
++		printf("  %s STATS %s\n",
++			sub_border, sub_border);
++		for (unsigned int j = 0; j < n_leaf_nodes; j++) {
++			struct rte_tm_node_stats stats = {0};
++
++			ret = rte_tm_node_stats_read(i, j,
++				&stats, &cap.stats_mask, 0, &error);
++			printf("  - pkts (%"PRIu64") "
++				"bytes (%"PRIu64")\n",
++				stats.n_pkts,
++				stats.n_bytes);
++			printf("  - leaf queued : "
++				"pkts (%"PRIu64") "
++				"bytes (%"PRIu64")\n",
++				stats.leaf.n_pkts_queued,
++				stats.leaf.n_bytes_queued);
++			printf("  %s dropped %s\n",
++				sub_border, sub_border);
++			printf("  - GREEN: "
++				"pkts (%"PRIu64") "
++				"bytes (%"PRIu64")\n",
++				stats.leaf.n_pkts_dropped[RTE_TM_GREEN],
++				stats.leaf.n_bytes_dropped[RTE_TM_GREEN]);
++			printf("  - YELLOW: "
++				"pkts (%"PRIu64") "
++				"bytes (%"PRIu64")\n",
++				stats.leaf.n_pkts_dropped[RTE_TM_YELLOW],
++				stats.leaf.n_bytes_dropped[RTE_TM_YELLOW]);
++			printf("  - RED: "
++				"pkts (%"PRIu64") "
++				"bytes (%"PRIu64")\n",
++				stats.leaf.n_pkts_dropped[RTE_TM_RED],
++				stats.leaf.n_bytes_dropped[RTE_TM_RED]);
++		}
++		printf("  %s%s\n\n",
++			sub_border, sub_border);
++	}
++
++	printf("  %s%s\n\n",
++		dbg_border, dbg_border);
++}
++
++static void
++debug_process(void)
++{
++	enable_debug_process = 0;
++
++	printf("  %s PROCESS INFO %s\n",
++		dbg_border, dbg_border);
++
++	struct rte_config *ptr = rte_eal_get_configuration();
++	
++	if (ptr) {
++		printf("  %s Generic Config %s\n",
++			sub_border, sub_border);
++		printf("  - master (%u) process (%s)\n",
++			ptr->master_lcore,
++			(ptr->process_type == RTE_PROC_AUTO)?"AUTO":
++			(ptr->process_type == RTE_PROC_PRIMARY)?"PRIMARY":
++			(ptr->process_type == RTE_PROC_SECONDARY)?"SECONDARY":
++			"INVALID");
++		printf("  - lcore count (%u) service (%u)\n",
++			ptr->lcore_count,
++			ptr->service_lcore_count);
++
++		printf("  %s LCORES-role %s\n",
++			sub_border, sub_border);
++		for (unsigned int i = 0; i < ptr->lcore_count; i++) {
++			printf("  - %u-%s\n", i, 
++			(ptr->lcore_role[i] == ROLE_RTE)?"RTE":
++			(ptr->lcore_role[i] == ROLE_OFF)?"OFF":
++			"SERVICE");
++		}
++
++		printf("  %s LCORES-socket %s\n",
++			sub_border, sub_border);
++		for (unsigned int i = 0; i < ptr->lcore_count; i++) {
++			printf("  - %u-%d\n", i, rte_lcore_to_socket_id(i));
++		}
++
++		printf("  %s lcore, total services %s\n",
++			sub_border, sub_border);
++		for (unsigned int i = 0; i < ptr->service_lcore_count; i++) {
++			printf("  lcore %u number of services - %d\n",
++				i, rte_service_lcore_count_services(i));
++		}
++
++		printf("  %s service_id, name, MT-SAFE, runstate %s\n",
++			sub_border, sub_border);
++		for (unsigned int i = 0; i < rte_service_get_count(); i++) {
++			int ret = 0;
++			printf("  service id %u name %s MT safe %d run state %d",
++				i, rte_service_get_name(i),
++				rte_service_probe_capability(i, RTE_SERVICE_CAP_MT_SAFE),
++				rte_service_runstate_get(i));
++
++			for (unsigned int j = 0; j < ptr->lcore_count; j++) {
++				ret = rte_service_map_lcore_get(i, j);
++				if (ret == 1)
++					printf("  - mapped to lcore (%d)\n", j);
++			}
++		}
++		printf("  %s%s\n",
++			sub_border, sub_border);
++
++		/* cpu flags */
++		printf("  CPU flag name - support or no support\n");
++		for (int i = 0; i < RTE_CPUFLAG_NUMFLAGS; i++) {
++			printf("  %s (%d), \t",
++				rte_cpu_get_flag_name(i),
++				rte_cpu_get_flag_enabled(i));
++			if ((i != 0) && (i%3 == 0))
++				printf("\n");
++		}
++		printf("\n");
++
++		printf("  %s%s\n",
++			sub_border, sub_border);
++	}
++
++	printf("  %s%s\n",
++		dbg_border, dbg_border);
++}
++
++static void
++debug_cryptodev(void)
++{
++	enable_debug_cryptodev = 0;
++
++	printf("  %s CRYPTODEV INFO %s\n",
++		dbg_border, dbg_border);
++
++	uint8_t crypto_dev_count = rte_cryptodev_count();
++	for (uint8_t i = 0; i < crypto_dev_count; i++) {
++		struct rte_cryptodev_info dev_info = {0};
++		struct rte_cryptodev_stats stats = {0};
++
++		rte_cryptodev_info_get (i, &dev_info);
++		
++		printf("  %s device %u %s\n",
++			sub_border, i, sub_border);
++
++		printf("  - name device (%s) "
++			"driver (%s) id (%u) "
++			"flags (0x%"PRIx64") "
++			"queue pairs (%d)\n",
++			rte_cryptodev_name_get(i),
++			dev_info.driver_name,
++			dev_info.driver_id,
++			dev_info.feature_flags,
++			rte_cryptodev_queue_pair_count(i));
++
++		printf("  %s feature flags %s\n",
++			sub_border, sub_border);
++		printf("  - symmetric (%c) asymmetric (%c) "
++			"symmetric operation chaining (%c)\n",
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING)?'y':'n');
++		printf("  - CPU : SSE (%c) AVX (%c) AVX2 (%c) AVX512 (%c)\n",
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_SSE)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_AVX)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_AVX2)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_AVX512)?'y':'n');
++
++		printf("  - Acclerate CPU AESNI (%c) HW (%c)\n",
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_AESNI)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_HW_ACCELERATED)?'y':'n');
++
++		printf("  - INLINE (%c)\n",
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_SECURITY)?'y':'n');
++
++		printf("  - ARM NEON (%c) CE (%c)\n",
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_NEON)?'y':'n',
++			(dev_info.feature_flags &
++			RTE_CRYPTODEV_FF_CPU_ARM_CE)?'y':'n');
++
++		printf("  %s buffer offload %s\n",
++			sub_border, sub_border);
++
++		printf("  %s stats %s\n",
++			sub_border, sub_border);
++		if (rte_cryptodev_stats_get(i, &stats) == 0) {
++			printf("  - enqueue count (%"PRIu64")"
++				" error (%"PRIu64")\n",
++				stats.enqueued_count,
++				stats.enqueue_err_count);
++			printf("  - dequeue count (%"PRIu64")"
++				" error (%"PRIu64")\n",
++				stats.dequeued_count,
++				stats.dequeue_err_count);
++		}
++
++		printf("  %s%s\n", sub_border, sub_border);
++	}
++
++	printf("  %s%s\n",
++		dbg_border, dbg_border);
++}
++
++static void
++rtemempool_objcbt(struct rte_mempool *mp,
++			void *opaque, void *obj,
++			unsigned obj_idx)
++{
++	printf(" - name %s, obj_idx %u opaque %p obj %p \n",
++		mp->name, obj_idx, opaque, obj);
++
++	if (obj)
++	rte_hexdump(stdout,
++			" Mempool Obj Content ",
++			obj,
++			(mp->elt_size > 256)?256:mp->elt_size);
++
++}
++
++static void
++debug_mempools(char *name)
++{
++	enable_debug_mempool = 0;
++
++	printf("  %s MEMPOOL INFO %s\n",
++		dbg_border, dbg_border);
++
++	if (name != NULL) {
++		struct rte_mempool *ptr = rte_mempool_lookup(name);
++		if (ptr != NULL) {
++			printf("  - Name: %s on socket %d flags %u\n",
++				ptr->name, ptr->socket_id, ptr->flags);
++			printf("  - Size %u Cache %u element %u"
++				" header %u trailer %u "
++				" private data size %u\n",
++				ptr->size,
++				ptr->cache_size,
++				ptr->elt_size,
++				ptr->header_size,
++				ptr->trailer_size,
++				ptr->private_data_size);
++			printf("  - memezone - socket %d\n",
++				ptr->mz->socket_id);
++
++			/* iterate each object */
++			int ret = rte_mempool_obj_iter(ptr, rtemempool_objcbt, NULL);
++			printf("  - iterated %u objects\n", ret);
++			
++		} else
++			rte_mempool_list_dump(stdout);
++	}
++	else
++		rte_mempool_list_dump(stdout);
++
++	printf("  %s%s%s\n\n",
++		dbg_border, dbg_border, dbg_border);
++}
++
++static void
++debug_rings(char *name)
++{
++	enable_debug_ring = 0;
++
++	printf("  %s RING INFO %s\n",
++		dbg_border, dbg_border);
++
++	if (name == NULL) {
++		rte_ring_list_dump(stdout);
++	}
++	else {
++		struct rte_ring *ptr = rte_ring_lookup(name);
++		if (ptr != NULL) {
++			printf("  - Name (%s) Socket (%d) flags (0x%x)\n",
++				ptr->name,
++				ptr->memzone->socket_id,
++				ptr->flags);
++			printf("  - size (%u) mask (0x%x) capacity (%u)\n",
++				ptr->size,
++				ptr->mask,
++				ptr->capacity);
++		}
++		else
++			rte_ring_list_dump(stdout);
++	}
++
++	printf("  %s%s\n\n",
++		dbg_border, dbg_border);
++}
++
++static void
++debug_interfaces(void)
++{
++	enable_debug_intf = 0;
++	int i = 0, ret = 0;
++
++	RTE_ETH_FOREACH_DEV(i) {
++		uint16_t mtu = 0;
++		struct rte_eth_link link = {0};
++		struct rte_eth_dev_info dev_info = {0};
++		struct rte_eth_rxq_info qinfo = {0};
++		struct rte_eth_stats stats = {0};
++		struct rte_eth_rss_conf rss_conf = {0};
++
++		printf("  %s NIC Port %d %s\n",
++			dbg_border, i, dbg_border);
++
++		printf("  %s Generic Config %s\n",
++			sub_border, sub_border);
++		printf("  - Socket %d\n", rte_eth_dev_socket_id(i));
++		rte_eth_link_get(i, &link);
++		printf("  - link speed %d duplex %d,"
++			" auto neg %d status %d\n",
++			link.link_speed,
++			link.link_duplex,
++			link.link_autoneg,
++			link.link_status);
++		printf("  - promiscous %d\n", rte_eth_promiscuous_get(i));
++		ret = rte_eth_dev_get_mtu(i, &mtu);
++		if (ret == 0)
++			printf("  - mtu %d\n", mtu);
++
++		printf("  %s queue drop %s\n",
++			sub_border, sub_border);
++		
++		rte_eth_dev_info_get(i, &dev_info);
++
++		for (int j = 0; j < dev_info.nb_rx_queues; j++) {
++			ret = rte_eth_rx_queue_info_get(i, j, &qinfo);
++			if (ret == 0) {
++				printf("  - queue %d rx scatter %d"
++					" descriptors %d offloads 0x%"PRIx64""
++					"  mempool socket %d\n",
++					j,
++					qinfo.scattered_rx,
++					qinfo.nb_desc,
++					qinfo.conf.offloads,
++					qinfo.mp->socket_id);
++
++				ret = rte_eth_stats_get(i, &stats);
++				if (ret == 0) {
++					printf("  - packet input %"PRIu64""
++						" output %"PRIu64""
++						" error %"PRIu64"\n",
++						stats.q_ipackets[j],
++						stats.q_opackets[j],
++						stats.q_errors[j]);
++				}
++			}
++			else
++				printf(" rte_eth_rx_queue_info_get fail %d\n", ret);
++
++			ret = rte_eth_dev_rss_hash_conf_get(i, &rss_conf);
++			if ((ret == 0) && (rss_conf.rss_key != NULL)) {
++				printf("  - RSS len %u key (hex): ",
++					rss_conf.rss_key_len);
++				for (int k = 0; k < rss_conf.rss_key_len; k++)
++					printf(" %x", rss_conf.rss_key[k]);
++				printf("\n  - hf 0x%"PRIx64"\n",
++					rss_conf.rss_hf);
++			}
++			else
++				printf(" rte_eth_dev_rss_hash_conf_get fails %d\n", ret);
++		}
++
++		printf("  %s generic drop information %s\n",
++			sub_border, sub_border);
++		ret = rte_eth_stats_get(i, &stats);
++		if (ret == 0) {
++			printf("  - packet input %"PRIu64","
++				" output %"PRIu64"\n",
++				stats.ipackets,
++				stats.opackets);
++			printf("  - packet error input %"PRIu64"."
++				" output %"PRIu64"\n",
++				stats.ierrors,
++				stats.oerrors);
++			printf("  - RX no mbuf %"PRIu64"\n", stats.rx_nombuf);
++		}
++
++		printf("  %s cyrpto context %s\n",
++			sub_border, sub_border);
++		void *ptr_ctx = rte_eth_dev_get_sec_ctx(i);
++		printf("  security context - %p\n", ptr_ctx);
++
++		if (ptr_ctx) {
++			const struct rte_security_capability *ptr_sec_cap = rte_security_capabilities_get(ptr_ctx);
++			if (ptr_sec_cap) {
++				printf("  - action (0x%x), protocol (0x%x),"
++					" offload flags (0x%x)\n",
++					ptr_sec_cap->action,
++					ptr_sec_cap->protocol,
++					ptr_sec_cap->ol_flags);
++				printf("  capabilities - operation type %x\n",
++					ptr_sec_cap->crypto_capabilities->op);
++			}
++		}
++		printf("  %s%s\n",
++			sub_border, sub_border);
++	}
++	printf("  %s%s\n",
++		dbg_border, dbg_border);
++	fflush(stdout);
++}
++
+ int
+ main(int argc, char **argv)
+ {
+@@ -649,6 +1250,7 @@
+ 
+ 	/* parse app arguments */
+ 	ret = proc_info_parse_args(argc, argv);
++	fflush(stdout);
+ 	if (ret < 0)
+ 		rte_exit(EXIT_FAILURE, "Invalid argument\n");
+ 
+@@ -682,6 +1284,18 @@
+ 						nb_xstats_ids);
+ 			else if (enable_metrics)
+ 				metrics_display(i);
++                        else if (enable_debug_intf)
++                                debug_interfaces();
++                        else if (enable_debug_ring)
++                                debug_rings(ring_name);
++                        else if (enable_debug_mempool)
++                                debug_mempools(mempool_name);
++                        else if (enable_debug_cryptodev)
++                                debug_cryptodev();
++                        else if (enable_debug_process)
++                                debug_process();
++                        else if (enable_debug_tm)
++                                debug_tm();
+ 		}
+ 	}
+ 

@@ -1,0 +1,5 @@
+mydpdklibs = run_command('pkg-config', '--static', '--cflags', '--libs', 'libdpdk')
+if mydpdklibs.returncode() == 0
+  mydpdk = declare_dependency(link_args: mydpdklibs.stdout().strip())
+  add_project_link_arguments([mydpdklibs.stdout().strip().split()], language: 'c')
+endif

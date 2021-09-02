@@ -1,0 +1,22 @@
+[binaries]
+c = 'gcc'
+cpp = 'g++'
+ld = 'ld'
+ar = 'ar'
+strip = 'strip'
+pkgconfig = 'pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'x86_64'
+cpu = 'core-avx2'
+endian = 'little'
+
+[properties]
+c_args = '-mno-avx512f'
+
+
+# Untar dpdk version 21.02 or 21.05 into desired folder
+# Change directory to dpdk root folder
+# Add file cross build config as `touch  config/x86/cross-noavx512`
+# execute meson cross-build pointing to config file.
